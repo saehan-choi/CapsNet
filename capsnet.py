@@ -28,22 +28,33 @@ class AgreementRouting(nn.Module):
 
 
     def forward(self, u_predict):
-        batch_size, input_caps, output_caps, output_dim = u_predict.size()
+        # torch.Size([batch_size, 1152, 10, 16])
 
+        batch_size, input_caps, output_caps, output_dim = u_predict.size()
         c = F.softmax(self.b)
+        # torch.Size([1152, 10])
         s = (c.unsqueeze(2) * u_predict).sum(dim=1)
+        # [1152, 10, 1] * [batch_size, 1152, 10, 16]
+        # [2, 1152, 10, 16] -> [2, 10, 16] batch만 빼고 계산 되네!
+        # 10x16 의 행렬이 1152개 있다가 -> 10x16만 남음 다 더해졌네.
         v = squash(s)
+        # relu 하는거라고 생각하면됨 (비선형성 추가)  [2, 10, 16]
 
         if self.n_iterations > 0:
             b_batch = self.b.expand((batch_size, input_caps, output_caps))
+            # [1152, 10] -> [2, 1152, 10]
             for r in range(self.n_iterations):
                 v = v.unsqueeze(1)
+                # [2, 1, 10, 16]
                 b_batch = b_batch + (u_predict * v).sum(-1)
-
+                print((u_predict * v).sum(-1).size())
+                #  ([batch_size, 1152, 10, 16] * [batch_size, 1, 10, 16]).sum(-1)
+                # ->[batch_size, 1152, 10]
                 c = F.softmax(b_batch.view(-1, output_caps)).view(-1, input_caps, output_caps, 1)
                 s = (c * u_predict).sum(dim=1)
                 v = squash(s)
 
+        # torch.Size([batch_size, 10, 16])
         return v
 
 class CapsLayer(nn.Module):

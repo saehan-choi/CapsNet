@@ -9,9 +9,14 @@ from torch.optim import lr_scheduler
 from torch.autograd import Variable
 
 import argparse
+
+from torchsummary import summary
+
 parser = argparse.ArgumentParser(description='CapsNet with MNIST')
-parser.add_argument('--batch-size', type=int, default=128, metavar='N',
+parser.add_argument('--batch-size', type=int, default=2, metavar='N',
                     help='input batch size for training (default: 64)')
+# batch_size_수정
+
 parser.add_argument('--test-batch-size', type=int, default=128, metavar='N',
                     help='input batch size for testing (default: 1000)')
 parser.add_argument('--epochs', type=int, default=250, metavar='N',
@@ -45,6 +50,7 @@ def squash(x):
     # print(f'weight vector shape:{(lengths2 / (1 + lengths2) / lengths).view(x.size(0), x.size(1), 1).size()}')
     # print(f'after squashX shape:{x.size()}')
     return x
+
 
 class AgreementRouting(nn.Module):
     # num_primaryCaps(input_caps ) = 32 * 6 * 6  -> 1152
@@ -134,36 +140,42 @@ class PrimaryCapsLayer(nn.Module):
 
     def forward(self, input):
         out = self.conv(input)
-
+        print(out.size())
         N, C, H, W = out.size()
         out = out.view(N, self.output_caps, self.output_dim, H, W)
         # will output N x OUT_CAPS x OUT_DIM
         out = out.permute(0, 1, 3, 4, 2).contiguous()
         out = out.view(out.size(0), -1, out.size(4))
         out = squash(out)
+        
+        # [batch_size, 6x6x32, 8]
         # 여기서 비선형성이 추가되어져나온다. squash 라는게 그냥 비선형성을 위한 relu 같은 존재로 보면될듯
-        # 마지막벡터에는 곱해지지않네요 print 찍어보면 암
+        # 마지막 벡터에는 곱해지지않네요 print 찍어보면 암
         # print(f'output_size입니다: {out.size()}') -> 여튼 input vector랑, output vector랑 shape는 동일함.
-
         return out
 
 
 class CapsNet(nn.Module):
     def __init__(self, routing_iterations, n_classes=n_classes):
-        # 
         super(CapsNet, self).__init__()
         self.conv1 = nn.Conv2d(1, 256, kernel_size=9, stride=1)
-        self.primaryCaps = PrimaryCapsLayer(256, 32, 8, kernel_size=9, stride=2)  # outputs 6*6
-        self.num_primaryCaps = 32 * 6 * 6
-        routing_module = AgreementRouting(self.num_primaryCaps, n_classes, routing_iterations)
+        
+        # (20,20,256)
+        self.primaryCaps = PrimaryCapsLayer(256, 32, 8, kernel_size=9, stride=2)  # [batch_size, 6x6x32, 8]
+        # self.num_primaryCaps = 32 * 6 * 6
 
+        self.num_primaryCaps = 1568
+        # 224로 하죠 ㅎㅎ
+        # num_primaryCaps만 조정하면 돌아갑니다.
+
+        routing_module = AgreementRouting(self.num_primaryCaps, n_classes, routing_iterations)
         # 라우팅이 있어야 digitCaps를 계산할 수 있네요
         # 근데 agreementRouting 에서 forward 부분은 capsLayer에서 진행되기 때문에 CapsLayer를 먼저 보도록 하겠습니다.
-
         self.digitCaps = CapsLayer(self.num_primaryCaps, 8, n_classes, 16, routing_module)
 
     def forward(self, input):
         x = self.conv1(input)
+        # [batch_size, out_channel, 20(width), 20(height)]
         x = F.relu(x)
         x = self.primaryCaps(x)
         x = self.digitCaps(x)
@@ -257,7 +269,8 @@ if __name__ == '__main__':
                            transforms.Pad(2), transforms.RandomCrop(28),
                            transforms.ToTensor()
                        ])),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
+        batch_size=args.batch_size, shuffle=True, **kwargs
+        )
 
     test_loader = DataLoader(
         datasets.MNIST('../data', train=False, transform=transforms.Compose([
@@ -284,7 +297,10 @@ if __name__ == '__main__':
 
 
     def train(epoch):
+
         model.train()
+        summary(model, (1, 30, 30))
+
         for batch_idx, (data, target) in enumerate(train_loader):
             if args.cuda:
                 data, target = data.cuda(), target.cuda()
@@ -339,7 +355,6 @@ if __name__ == '__main__':
                     test_loss += loss_fn(probs, target, size_average=False).item()
                     # loss_fn -> margin_loss
 
-
                 pred = probs.data.max(1, keepdim=True)[1]  # get the index of the max probability
                 #     probs:tensor([[0.0259, 0.0423, 0.0937,  ..., 0.0304, 0.0151, 0.0750],
                 #     [0.8676, 0.0431, 0.0692,  ..., 0.0208, 0.0116, 0.0254]......
@@ -365,3 +380,4 @@ if __name__ == '__main__':
         torch.save(model.state_dict(),
                    '{:03d}_model_dict_{}routing_reconstruction{}.pt'.format(epoch, args.routing_iterations,
                                                                              args.with_reconstruction))
+

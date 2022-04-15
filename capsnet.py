@@ -13,7 +13,7 @@ import argparse
 from torchsummary import summary
 
 parser = argparse.ArgumentParser(description='CapsNet with MNIST')
-parser.add_argument('--batch-size', type=int, default=2, metavar='N',
+parser.add_argument('--batch-size', type=int, default=1, metavar='N',
                     help='input batch size for training (default: 64)')
 # batch_size_수정
 
@@ -23,6 +23,7 @@ parser.add_argument('--epochs', type=int, default=250, metavar='N',
                     help='number of epochs to train (default: 250)')
 parser.add_argument('--n_classes', type=int, default=10, metavar='N',
                     help='number of classes (default: 10)')
+
 
 # if you want change the value                                               
 parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
@@ -38,7 +39,6 @@ parser.add_argument('--routing_iterations', type=int, default=3)
 parser.add_argument('--with_reconstruction', action='store_true', default=False)
 # reconstruction은 안쓸거니깐 그냥 false 그대로 놔도 될듯. ㅎ
 args = parser.parse_args()
-
 n_classes = args.n_classes
 
 
@@ -51,29 +51,28 @@ def squash(x):
     # print(f'after squashX shape:{x.size()}')
     return x
 
-
 class AgreementRouting(nn.Module):
     # num_primaryCaps(input_caps ) = 32 * 6 * 6  -> 1152
     # n_classes      (output_caps) = 10
     # n_iterations                 = 3  -> parser 에 나와있음.
+    # n_iterations만큼 더 비선형성을 추가하네요. squash함수에 다시 들어감으로서
 
     def __init__(self, input_caps, output_caps, n_iterations):
         super(AgreementRouting, self).__init__()
         self.n_iterations = n_iterations
         self.b = nn.Parameter(torch.zeros((input_caps, output_caps)))
 
-
     def forward(self, u_predict):
         # torch.Size([batch_size, 1152, 10, 16])
         batch_size, input_caps, output_caps, output_dim = u_predict.size()
-
         c = F.softmax(self.b, dim=1)
         # dim 에러로 수정됨
         # torch.Size([1152, 10])
         s = (c.unsqueeze(2) * u_predict).sum(dim=1)
         # [1152, 10, 1] * [batch_size, 1152, 10, 16]
-        # [2, 1152, 10, 16] -> [2, 10, 16] batch만 빼고 계산 되네!
+        # [batch_size, 1152, 10, 16] -> [batch_size, 10, 16] batch만 빼고 계산 되네!
         # 10x16 의 행렬이 1152개 있다가 -> 10x16만 남음 다 더해졌네.
+
         v = squash(s)
         # relu 하는거라고 생각하면됨 (비선형성 추가)  [batch_size, 10, 16]
 
@@ -93,12 +92,15 @@ class AgreementRouting(nn.Module):
                 # .view(-1, input_caps, output_caps, 1) -> 
 
                 s = (c * u_predict).sum(dim=1)
+                # c         : torch.Size([1, 1152, 10, 1])
+                # u_predict : torch.Size([1, 1152, 10, 16])
+
                 v = squash(s)
                 # [batch_size, 10, 16]
         return v
 
 class CapsLayer(nn.Module):
-    # digitcaps를 계산하는 부분이라고 봐도무방
+    # digitcaps를 계산하는 부분이라고 보면됨.
     # input_caps = 32 * 6 * 6, input_dim = 8, output_caps = 10, output_dim = 16, routing_module
     def __init__(self, input_caps, input_dim, output_caps, output_dim, routing_module):
         super(CapsLayer, self).__init__()
@@ -132,22 +134,29 @@ class CapsLayer(nn.Module):
 
 class PrimaryCapsLayer(nn.Module):
     def __init__(self, input_channels, output_caps, output_dim, kernel_size, stride):
+        # PrimaryCapsLayer(256, 32, 8, kernel_size=9, stride=2)
         super(PrimaryCapsLayer, self).__init__()
         self.conv = nn.Conv2d(input_channels, output_caps * output_dim, kernel_size=kernel_size, stride=stride)
+
         self.input_channels = input_channels
         self.output_caps = output_caps
         self.output_dim = output_dim
+        # 256 20 20
 
     def forward(self, input):
         out = self.conv(input)
-        print(out.size())
+        # [1, 1, 28, 28] -> conv 를거치면서 [batch_size, 256(out_channel), 20, 20] 
+        # -> out.size() -> [batch_size, 256(out_channel), 6, 6]
+
+
         N, C, H, W = out.size()
         out = out.view(N, self.output_caps, self.output_dim, H, W)
+        
         # will output N x OUT_CAPS x OUT_DIM
         out = out.permute(0, 1, 3, 4, 2).contiguous()
         out = out.view(out.size(0), -1, out.size(4))
         out = squash(out)
-        
+
         # [batch_size, 6x6x32, 8]
         # 여기서 비선형성이 추가되어져나온다. squash 라는게 그냥 비선형성을 위한 relu 같은 존재로 보면될듯
         # 마지막 벡터에는 곱해지지않네요 print 찍어보면 암
@@ -159,13 +168,14 @@ class CapsNet(nn.Module):
     def __init__(self, routing_iterations, n_classes=n_classes):
         super(CapsNet, self).__init__()
         self.conv1 = nn.Conv2d(1, 256, kernel_size=9, stride=1)
-        
+
         # (20,20,256)
         self.primaryCaps = PrimaryCapsLayer(256, 32, 8, kernel_size=9, stride=2)  # [batch_size, 6x6x32, 8]
-        # self.num_primaryCaps = 32 * 6 * 6
-
-        self.num_primaryCaps = 1568
-        # 224로 하죠 ㅎㅎ
+        # 32x8 = 256
+        self.num_primaryCaps = 32 * 6 * 6
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+        # 30x30x1 로 테스트시 ->  self.num_primaryCaps = 1568 SUMMARY 하고싶으면 이걸 바꿔야 합니다!!!!!!!!!
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
         # num_primaryCaps만 조정하면 돌아갑니다.
 
         routing_module = AgreementRouting(self.num_primaryCaps, n_classes, routing_iterations)
@@ -299,7 +309,7 @@ if __name__ == '__main__':
     def train(epoch):
 
         model.train()
-        summary(model, (1, 30, 30))
+        summary(model, (1, 28, 28))
 
         for batch_idx, (data, target) in enumerate(train_loader):
             if args.cuda:

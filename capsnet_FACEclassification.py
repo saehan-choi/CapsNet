@@ -24,7 +24,6 @@ parser.add_argument('--epochs', type=int, default=250, metavar='N',
 parser.add_argument('--n_classes', type=int, default=10, metavar='N',
                     help='number of classes (default: 10)')
 
-
 # if you want change the value                                               
 parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                     # 3e-4 로도 바꿔보기
@@ -38,18 +37,20 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
 parser.add_argument('--routing_iterations', type=int, default=3)
 parser.add_argument('--with_reconstruction', action='store_true', default=False)
 # reconstruction은 안쓸거니깐 그냥 false 그대로 놔도 될듯. ㅎ
+
 args = parser.parse_args()
 n_classes = args.n_classes
-
 epoch_arr = []
 
 def squash(x):
     # print(f'original    x shape:{x.size()}')
     lengths2 = x.pow(2).sum(dim=2)
     lengths = lengths2.sqrt()
+    print(lengths.size())
     x = x * (lengths2 / (1 + lengths2) / lengths).view(x.size(0), x.size(1), 1)
     # print(f'weight vector shape:{(lengths2 / (1 + lengths2) / lengths).view(x.size(0), x.size(1), 1).size()}')
     # print(f'after squashX shape:{x.size()}')
+    # 잘못구현된게 아닌가? 단위벡터가 곱해져야하는데 이건 lengths 로 나눠버리네.
     return x
 
 class AgreementRouting(nn.Module):
@@ -309,30 +310,24 @@ if __name__ == '__main__':
     scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=15, min_lr=1e-6)
     loss_fn = MarginLoss(0.9, 0.1, 0.5)
 
-
     def train(epoch):
-
         model.train()
         summary(model, (3, 32, 32))
-
         for batch_idx, (data, target) in enumerate(train_loader):
             if args.cuda:
                 data, target = data.cuda(), target.cuda()
             data, target = data, target
             # data, target = Variable(data), Variable(target, requires_grad=False)
             optimizer.zero_grad()
-
             # print(data.size())
             # [batch_size, 1, 28, 28]
             # 채널이 1개인것도 염두해두어야함.
-
             # reconstruction은 없어서 else로 넘어감
             if args.with_reconstruction:
                 output, probs = model(data, target)
                 reconstruction_loss = F.mse_loss(output, data.view(-1, 784))
                 margin_loss = loss_fn(probs, target)
                 loss = reconstruction_alpha * reconstruction_loss + margin_loss
-
             else:
                 output, probs = model(data)
                 # print(output.size())
